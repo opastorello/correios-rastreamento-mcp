@@ -97,6 +97,8 @@ Solver local baseado em rede neural (CNN + BiLSTM + CTC Loss), treinado nas imag
 |--------|----------|---------|-----------|
 | 1 | 55.033 | 99.57% | ddddocr (bootstrap) |
 | 2 | 55.000 | **99.61%** | Modelo R1 (83.6% acerto na coleta) |
+| 3 (fine-tuning) | 20.000 | 99.63% | Modelo R2 (~99% acerto na coleta) |
+| 4 (fine-tuning) | 100.000 | **99.62%** | Modelo R3 (~99% acerto na coleta) |
 
 ### Comandos (desenvolvimento)
 
@@ -105,8 +107,14 @@ Solver local baseado em rede neural (CNN + BiLSTM + CTC Loss), treinado nas imag
 .venv\Scripts\python -m app.captcha.collector --probe AA000000000BR --target 20000 --workers 8 \
   --proxy-api http://host/api/v1/proxy/all --proxy-key APIKEY
 
-# Treinar
+# Treinar do zero
 .venv\Scripts\python -m app.captcha.train --epochs 80 --batch 128 --lr 1e-3
+
+# Fine-tuning a partir de checkpoint
+.venv\Scripts\python -m app.captcha.train --epochs 60 --batch 128 --lr 1e-4 --checkpoint app/captcha/captcha_model.pt
+
+# Aguardar coleta terminar e treinar automaticamente
+.venv\Scripts\python -m app.captcha.train --wait-for 100000 --epochs 60 --lr 1e-4 --checkpoint app/captcha/captcha_model.pt
 
 # Ver histórico de versões
 .venv\Scripts\python -m app.captcha.registry
@@ -117,15 +125,30 @@ Solver local baseado em rede neural (CNN + BiLSTM + CTC Loss), treinado nas imag
 ```
 Rodada 1: ddddocr (~40-50% acurácia labels) → modelo ~98-99%
 Rodada 2: modelo R1 (~83-87% acurácia labels) → modelo ~99.5%+
-Rodada 3: modelo R2 (~99%+ acurácia labels)   → teto da arquitetura
+Rodada 3: modelo R2 (~99%+ acurácia labels)   → teto da arquitetura (~99.6%)
 ```
+
+### Avaliação interna
+
+```bash
+# Avalia o modelo contra todas as amostras salvas
+.venv\Scripts\python -m app.captcha.evaluate
+
+# Amostra aleatória de 5000 imagens
+.venv\Scripts\python -m app.captcha.evaluate --samples 5000
+```
+
+Resultado v6 sobre 100k amostras: **99.97% por sequência** | **99.99% por caractere**
+(val_acc honesta sobre dados nunca vistos: **99.62%**)
+
+Erros residuais são confusões visuais esperadas: `n↔h`, `e↔c`, `r↔p`, `v↔y`.
 
 ## Fluxo de scraping
 
 **Objeto único:**
 1. GET `index.php` — session cookie
 2. GET `securimage_show.php` — imagem CAPTCHA
-3. Resolve CAPTCHA com CRNN local (99.61% acurácia)
+3. Resolve CAPTCHA com CRNN local (99.62% acurácia)
 4. GET `resultado.php?objeto={code}&captcha={text}&mqs=S` — JSON com eventos
 5. Retry até 4x em caso de CAPTCHA inválido
 
@@ -148,7 +171,8 @@ app/
     ├── model.py         # Arquitetura CRNN
     ├── predictor.py     # Inferência (produção)
     ├── dataset.py       # Dataset + augmentation (dev)
-    ├── train.py         # Loop de treino (dev)
+    ├── train.py         # Loop de treino — suporta --checkpoint e --wait-for (dev)
+    ├── evaluate.py      # Avalia acurácia contra amostras salvas (dev)
     ├── collector.py     # Coleta de amostras (dev)
     └── registry.py      # Versionamento de modelos (dev)
 ```
