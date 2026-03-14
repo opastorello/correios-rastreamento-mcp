@@ -3,9 +3,11 @@ Treino do modelo CRNN para o CAPTCHA do Correios.
 
 Uso:
     python -m app.captcha.train --epochs 80 --batch 128 --lr 1e-3
+    python -m app.captcha.train --wait-for 100000 --epochs 60 --lr 1e-4 --checkpoint app/captcha/captcha_model.pt
 """
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import torch
@@ -33,7 +35,18 @@ def char_accuracy(preds, targets_flat, target_lengths):
     return correct / max(total, 1)
 
 
-def train(epochs=80, batch_size=128, lr=1e-3):
+def wait_for_samples(target: int, interval: int = 30) -> None:
+    print(f"Aguardando {target} amostras em {DATA_DIR}...")
+    while True:
+        count = len(list(DATA_DIR.glob("*.png")))
+        print(f"  {count}/{target} amostras coletadas", end="\r", flush=True)
+        if count >= target:
+            print(f"\n{count} amostras prontas! Iniciando treino...")
+            break
+        time.sleep(interval)
+
+
+def train(epochs=80, batch_size=128, lr=1e-3, checkpoint=None):
     dataset = CaptchaDataset(DATA_DIR, augment=True)
     if len(dataset) == 0:
         print(f"Nenhuma amostra em {DATA_DIR}. Execute o collector primeiro.")
@@ -54,6 +67,13 @@ def train(epochs=80, batch_size=128, lr=1e-3):
     print(f"Device: {device} | Amostras: {len(dataset)} (train={train_size}, val={val_size})")
 
     model = CaptchaModel().to(device)
+    if checkpoint:
+        ckpt = Path(checkpoint)
+        if not ckpt.exists():
+            print(f"Checkpoint nao encontrado: {ckpt}")
+            sys.exit(1)
+        model.load_state_dict(torch.load(ckpt, map_location=device))
+        print(f"Fine-tuning a partir de: {ckpt}")
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     ctc_loss = nn.CTCLoss(blank=len(CHARSET), zero_infinity=True)
@@ -121,5 +141,11 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--batch", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Caminho para um .pt existente para fine-tuning (ex: app/captcha/captcha_model.pt)")
+    parser.add_argument("--wait-for", type=int, default=None, dest="wait_for",
+                        help="Aguarda até N amostras estarem disponíveis antes de treinar")
     args = parser.parse_args()
-    train(args.epochs, args.batch, args.lr)
+    if args.wait_for:
+        wait_for_samples(args.wait_for)
+    train(args.epochs, args.batch, args.lr, args.checkpoint)

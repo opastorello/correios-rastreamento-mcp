@@ -39,9 +39,10 @@ app/
 └── captcha/
     ├── model.py         # CRNN architecture (CNN + BiLSTM + CTC Loss), CHARSET, IMG_H/W
     ├── dataset.py       # CaptchaDataset — filename format: {label}_{timestamp_ms}.png
-    ├── train.py         # Training loop with early stopping + AMP
+    ├── train.py         # Training loop with early stopping + AMP; --wait-for waits for N samples
     ├── predictor.py     # Inference — lazy-loads captcha_model.pt on first call
     ├── collector.py     # Collects labeled samples; supports proxy pool + multithreading
+    ├── evaluate.py      # Evaluates model accuracy against saved samples in data/
     └── registry.py      # Model versioning — saves to registry.json
 ```
 
@@ -77,6 +78,8 @@ app/
 - Amostras ficam em `app/captcha/data/*.png` com nome `{label}_{timestamp_ms}.png`
 - Modelo salvo em `app/captcha/captcha_model.pt`; histórico em `app/captcha/registry.json`
 - No Windows, `num_workers=0` é forçado no DataLoader (limitação PyTorch+CUDA)
+- Acurácia atual (v6): 99.62% val_acc | 99.97% sequência sobre 100k amostras (inclui treino)
+- Erros típicos: confusões visuais `n↔h`, `e↔c`, `r↔p`, `v↔y` — limite da arquitetura
 
 ### Collector de amostras
 
@@ -105,10 +108,23 @@ python -m app.captcha.collector --probe AA000000000BR --target 20000 --workers 5
 
 **Sweet spot de workers:** `proxies_disponíveis / 60 × tempo_médio_request ≈ 64 workers` com 950 proxies. Acima disso os workers ficam esperando cooldown.
 
-Treino e versionamento:
+Treino, avaliação e versionamento:
 ```bash
+# Treino do zero
 python -m app.captcha.train --epochs 80 --batch 128 --lr 1e-3
-python -m app.captcha.registry   # lista versões treinadas
+
+# Fine-tuning a partir de checkpoint
+python -m app.captcha.train --epochs 60 --batch 128 --lr 1e-4 --checkpoint app/captcha/captcha_model.pt
+
+# Aguardar coleta terminar e treinar automaticamente
+python -m app.captcha.train --wait-for 100000 --epochs 60 --lr 1e-4 --checkpoint app/captcha/captcha_model.pt
+
+# Avaliar acurácia contra amostras salvas
+python -m app.captcha.evaluate
+python -m app.captcha.evaluate --samples 5000   # amostra aleatória
+
+# Listar versões treinadas
+python -m app.captcha.registry
 ```
 
 ### Authentication
