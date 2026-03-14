@@ -1,0 +1,14 @@
+.venv
+venv311
+__pycache__
+*.pyc
+*.pyo
+.env
+app/captcha/data/
+app/captcha/registry.json
+app/captcha/train.py
+app/captcha/dataset.py
+app/captcha/collector.py
+app/captcha/registry.py
+requirements-dev.txt
+*.pt.bak
