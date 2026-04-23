@@ -1,0 +1,7 @@
+services:
+  correios-rastreamento-mcp:
+    build: .
+    ports:
+      - "8003:8000"
+    env_file: .env
+    restart: unless-stopped

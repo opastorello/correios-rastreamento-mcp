@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE: ghcr.io/opastorello/correios-rastreamento-mcp
+  IMAGE: ghcr.io/opastorello/correios-rastreamento
 
 jobs:
   build:
