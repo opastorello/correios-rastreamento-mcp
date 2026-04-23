@@ -12,6 +12,9 @@ __pycache__/
 # Dados de treino (grandes demais para git)
 app/captcha/data/
 
+# Histórico de consultas (dados do usuário, não versionar)
+app/data/
+
 # Registry local
 app/captcha/registry.json
 

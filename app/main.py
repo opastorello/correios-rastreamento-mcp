@@ -1,43 +1,32 @@
-import os
-from contextlib import asynccontextmanager
-
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
-from slowapi import _rate_limit_exceeded_handler
+from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 load_dotenv()
 
 from app.auth import TokenMiddleware  # noqa: E402
 from app.mcp_server import mcp  # noqa: E402
 from app.routers import history, rastreamento, ui  # noqa: E402
-from app.routers.rastreamento import limiter  # noqa: E402
 
-_mcp_app = mcp.http_app(path="/")
+limiter = Limiter(key_func=get_remote_address)
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    async with _mcp_app.lifespan(app):
-        yield
-
+_mcp_app = mcp.http_app(path="/mcp")
 
 app = FastAPI(
     title="Correios Rastreamento",
-    description="API REST e MCP para rastreamento de objetos dos Correios com CAPTCHA solver CRNN local.",
+    description=(
+        "Rastreia objetos dos Correios com histórico completo de eventos e resolução automática "
+        "de CAPTCHA via rede neural local.\n\n"
+        "**Autenticação:** quando `API_TOKEN` está configurado, todos os endpoints (exceto `/`) "
+        "exigem `Authorization: Bearer <token>`. Use o botão **Authorize** acima para informar o token."
+    ),
     version="1.0.0",
-    lifespan=lifespan,
+    lifespan=_mcp_app.lifespan,
+    swagger_ui_parameters={"persistAuthorization": True},
 )
-
-app.add_middleware(TokenMiddleware)
-
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-app.include_router(rastreamento.router)
-app.include_router(history.router)
-app.include_router(ui.router)
 
 
 def _custom_openapi():
@@ -62,16 +51,24 @@ def _custom_openapi():
 
 app.openapi = _custom_openapi
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(TokenMiddleware)
+
 
 @app.get(
     "/health",
-    summary="Health check",
-    description='Verifica se o servidor está online. Sempre retorna `{"status": "ok"}`. Rota pública em desenvolvimento.',
     tags=["status"],
+    summary="Health check",
+    description="Verifica se o servidor está no ar. Em `ENV=production` exige token.",
     responses={200: {"content": {"application/json": {"example": {"status": "ok"}}}}},
 )
 def health():
     return {"status": "ok"}
 
 
-app.mount("/mcp", _mcp_app)
+app.include_router(ui.router)
+app.include_router(history.router)
+app.include_router(rastreamento.router)
+
+app.mount("/", _mcp_app)
