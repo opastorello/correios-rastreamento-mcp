@@ -781,7 +781,7 @@ _HTML = r"""<!DOCTYPE html>
       btn.disabled = true;
       btn.textContent = 'Validando…';
       try {
-        const res = await fetch('/history/', { headers: { 'Authorization': 'Bearer ' + tok } });
+        const res = await fetch('/health', { headers: { 'Authorization': 'Bearer ' + tok } });
         if (res.status === 401) {
           showGateMsg('✕ Token inválido.'); btn.disabled = false; btn.textContent = 'Entrar'; return;
         }
@@ -812,22 +812,35 @@ _HTML = r"""<!DOCTYPE html>
       if (name === 'historico') renderHistory();
     }
 
-    /* ── history ── */
-    async function saveToHistory(codigo, status, entregue, duracao_segundos) {
-      await fetch('/history/save', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json', ...authH()},
-        body: JSON.stringify({ codigo, status, entregue, duracao_segundos })
-      }).catch(() => {});
+    /* ── history (localStorage — por browser/usuário) ── */
+    const HIST_KEY = 'correios_rastreamento_history';
+    function histLoad() { try { return JSON.parse(localStorage.getItem(HIST_KEY) || '{}'); } catch { return {}; } }
+    function histSave(d) { localStorage.setItem(HIST_KEY, JSON.stringify(d)); }
+
+    function saveToHistory(codigo, status, entregue, duracao_segundos) {
+      const data = histLoad();
+      const key  = codigo.toUpperCase();
+      const now  = new Date().toISOString();
+      if (data[key]) {
+        data[key].consultas++;
+        data[key].ultima_consulta = now;
+        if (status) data[key].status = status;
+        if (entregue !== null && entregue !== undefined) data[key].entregue = entregue;
+        if (duracao_segundos != null) data[key].ultima_duracao_s = Math.round(duracao_segundos * 10) / 10;
+      } else {
+        data[key] = { codigo: key, status, entregue, consultas: 1,
+          primeira_consulta: now, ultima_consulta: now,
+          ultima_duracao_s: duracao_segundos != null ? Math.round(duracao_segundos * 10) / 10 : null };
+      }
+      histSave(data);
     }
 
-    async function clearHistory() {
-      await fetch('/history/', { method: 'DELETE', headers: {...authH()} }).catch(() => {});
-      renderHistory();
-    }
+    function clearHistory() { localStorage.removeItem(HIST_KEY); renderHistory(); }
 
-    async function deleteHistoryEntry(codigo) {
-      await fetch('/history/' + encodeURIComponent(codigo), { method: 'DELETE', headers: {...authH()} }).catch(() => {});
+    function deleteHistoryEntry(codigo) {
+      const data = histLoad();
+      delete data[codigo.toUpperCase()];
+      histSave(data);
       renderHistory();
     }
 
@@ -840,37 +853,32 @@ _HTML = r"""<!DOCTYPE html>
       return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' + hm;
     }
 
-    async function renderHistory() {
+    function renderHistory() {
       const $list = document.getElementById('hist-list');
-      $list.innerHTML = '<div class="hist-empty">Carregando…</div>';
-      try {
-        const res  = await fetch('/history/', { headers: {...authH()} });
-        const data = await res.json();
-        const entries = data.entries || [];
-        if (!entries.length) {
-          $list.innerHTML = '<div class="hist-empty">Nenhum rastreamento registrado ainda.</div>';
-          return;
-        }
-        $list.innerHTML = entries.map(h => {
-          const statusColor = h.entregue ? 'var(--green)' : 'var(--accent-h)';
-          const statusText  = h.status || (h.entregue ? 'ENTREGUE' : 'EM ANDAMENTO');
-          return `
-          <div class="hist-item" onclick="fillFromHistory('${esc(h.codigo)}')">
-            <div style="flex:1;min-width:0">
-              <div class="hist-code">${esc(h.codigo)}</div>
-              <div class="hist-status" style="color:${statusColor}">${esc(statusText)}</div>
-              ${h.ultima_duracao_s != null ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(h.ultima_duracao_s)}s · ${esc(h.consultas)}× consultado</div>` : `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(h.consultas)}× consultado</div>`}
-            </div>
-            <div style="text-align:right;flex-shrink:0">
-              <div class="hist-time">${fmtDt(h.ultima_consulta)}</div>
-            </div>
-            <button class="hist-del" title="Remover entrada"
-              onclick="event.stopPropagation(); deleteHistoryEntry('${esc(h.codigo)}')">×</button>
-          </div>`;
-        }).join('');
-      } catch {
-        $list.innerHTML = '<div class="hist-empty">Erro ao carregar histórico.</div>';
+      const data = histLoad();
+      const entries = Object.values(data).sort((a, b) =>
+        (b.ultima_consulta || '') > (a.ultima_consulta || '') ? 1 : -1);
+      if (!entries.length) {
+        $list.innerHTML = '<div class="hist-empty">Nenhum rastreamento registrado ainda.</div>';
+        return;
       }
+      $list.innerHTML = entries.map(h => {
+        const statusColor = h.entregue ? 'var(--green)' : 'var(--accent-h)';
+        const statusText  = h.status || (h.entregue ? 'ENTREGUE' : 'EM ANDAMENTO');
+        return `
+        <div class="hist-item" onclick="fillFromHistory('${esc(h.codigo)}')">
+          <div style="flex:1;min-width:0">
+            <div class="hist-code">${esc(h.codigo)}</div>
+            <div class="hist-status" style="color:${statusColor}">${esc(statusText)}</div>
+            ${h.ultima_duracao_s != null ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(h.ultima_duracao_s)}s · ${esc(h.consultas)}× consultado</div>` : `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(h.consultas)}× consultado</div>`}
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div class="hist-time">${fmtDt(h.ultima_consulta)}</div>
+          </div>
+          <button class="hist-del" title="Remover entrada"
+            onclick="event.stopPropagation(); deleteHistoryEntry('${esc(h.codigo)}')">×</button>
+        </div>`;
+      }).join('');
     }
 
     function fillFromHistory(codigo) {
