@@ -1,7 +1,7 @@
 import re as _re
 from typing import List
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
