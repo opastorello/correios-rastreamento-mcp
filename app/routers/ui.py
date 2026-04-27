@@ -525,9 +525,10 @@ _HTML = r"""<!DOCTYPE html>
     $codigos.addEventListener('input', function() {
       autoResize();
       const codes = parseCodigos();
-      if (codes.length > 1)      $hint.textContent = `${codes.length} códigos detectados`;
-      else if (codes.length === 1) $hint.textContent = '';
-      else                          $hint.textContent = '';
+      const lotes = codes.length > 20 ? Math.ceil(codes.length / 20) : 0;
+      if (lotes > 1)              $hint.textContent = `${codes.length} códigos — ${lotes} lotes de 20`;
+      else if (codes.length > 1)  $hint.textContent = `${codes.length} códigos detectados`;
+      else                         $hint.textContent = '';
     });
 
     $codigos.addEventListener('keydown', e => {
@@ -615,13 +616,17 @@ _HTML = r"""<!DOCTYPE html>
     }
 
     /* ── rastrear ── */
+    const CODE_RE = /^[A-Z]{2}\d{9}[A-Z]{2}$/;
+
     async function rastrear() {
-      const codes = parseCodigos();
-      if (!codes.length) { $codigos.focus(); return; }
-      if (codes.length > 20) {
-        $out.innerHTML = `<div class="err-box">⚠️ Máximo de 20 códigos por vez (${codes.length} detectados).</div>`;
-        return;
-      }
+      const rawCodes = parseCodigos();
+      if (!rawCodes.length) { $codigos.focus(); return; }
+
+      // deduplicar
+      const codes  = [...new Set(rawCodes)];
+      const dupes  = rawCodes.length - codes.length;
+      const valid  = codes.filter(c =>  CODE_RE.test(c));
+      const invalid = codes.filter(c => !CODE_RE.test(c));
 
       _abort = new AbortController();
       const {signal} = _abort;
@@ -635,19 +640,33 @@ _HTML = r"""<!DOCTYPE html>
       startTimer();
 
       try {
-        const s1 = addStep(codes.length > 1
-          ? `${codes.length} código${codes.length > 1 ? 's' : ''} para rastrear`
-          : `Código: ${codes[0]}`);
+        // step inicial com info de dedup / inválidos
+        let s1txt = codes.length === 1 ? `Código: ${codes[0]}` : `${codes.length} código${codes.length > 1 ? 's' : ''} para rastrear`;
+        if (dupes)    s1txt += ` (${dupes} duplicata${dupes > 1 ? 's' : ''} removida${dupes > 1 ? 's' : ''})`;
+        if (invalid.length) s1txt += ` — ${invalid.length} inválido${invalid.length > 1 ? 's' : ''}`;
+        const s1 = addStep(s1txt);
         await delay(200);
         doneStep(s1);
+
+        // marcar inválidos imediatamente
+        for (const cod of invalid) failStep(addStep(`${cod} — formato inválido`));
+
+        if (!valid.length) {
+          stopTimer();
+          $out.innerHTML = invalid.map(c =>
+            `<div class="err-box" style="margin-bottom:8px">⚠️ ${esc(c)}: formato inválido — esperado 2 letras + 9 dígitos + 2 letras (ex: AA000000000BR)</div>`
+          ).join('');
+          return;
+        }
 
         const s2 = addStep('Conectando ao servidor Correios…');
         await delay(300);
         doneStep(s2, 'Conexão estabelecida');
 
-        if (codes.length === 1) {
+        if (valid.length === 1) {
+          /* ── código único ── */
           const s3 = addStep('Resolvendo CAPTCHA…');
-          const res  = await postA('/rastreamento/objeto', { codigo: codes[0] });
+          const res  = await postA('/rastreamento/objeto', { codigo: valid[0] });
           const data = await res.json();
           const elapsed = $el.textContent;
           stopTimer();
@@ -657,42 +676,52 @@ _HTML = r"""<!DOCTYPE html>
             return;
           }
           doneStep(s3, 'CAPTCHA resolvido');
-          $out.innerHTML = renderCard(data, codes[0], parseFloat(elapsed));
+          $out.innerHTML = renderCard(data, valid[0], parseFloat(elapsed));
           if (!data.erro) {
             const lastStatus = ((data.eventos || [])[0] || {}).descricaoWeb || '';
-            saveToHistory(data.codObjeto || codes[0], lastStatus.toUpperCase() || null,
+            saveToHistory(data.codObjeto || valid[0], lastStatus.toUpperCase() || null,
               (data.situacao || '').toUpperCase() === 'E', parseFloat(elapsed));
           }
         } else {
-          const codeSteps = {};
-          for (const cod of codes) {
-            codeSteps[cod] = addStep(`${cod} — aguardando…`);
-          }
+          /* ── múltiplos: lotes de 20 via /multiplos (1 CAPTCHA por lote) ── */
+          const BATCH = 20;
+          const batches = [];
+          for (let i = 0; i < valid.length; i += BATCH) batches.push(valid.slice(i, i + BATCH));
+
+          const batchSteps = batches.map((b, i) =>
+            addStep(`Lote ${i+1}/${batches.length} — ${b.length} código${b.length > 1 ? 's' : ''}…`)
+          );
 
           const results = {};
-          await Promise.all(codes.map(async cod => {
+          for (let i = 0; i < batches.length; i++) {
+            const batch = batches[i];
+            const bStep = batchSteps[i];
             try {
-              const res  = await postA('/rastreamento/objeto', { codigo: cod });
+              const res  = await postA('/rastreamento/multiplos', { codigos: batch });
               const data = await res.json();
-              results[cod] = data;
               if (!res.ok) {
-                failStep(codeSteps[cod], `${cod} — erro`);
-              } else if (data.erro) {
-                failStep(codeSteps[cod], `${cod} — não encontrado`);
+                failStep(bStep, `Lote ${i+1}/${batches.length} — erro`);
+                batch.forEach(c => { results[c] = null; });
               } else {
-                const status = ((data.eventos || [])[0] || {}).descricaoWeb || '';
-                doneStep(codeSteps[cod], `${cod} — ${status.toLowerCase() || 'consultado'}`);
+                let found = 0;
+                for (const cod of batch) {
+                  results[cod] = data[cod] || null;
+                  if (data[cod] && !data[cod].erro) found++;
+                }
+                doneStep(bStep, `Lote ${i+1}/${batches.length} — ${found}/${batch.length} encontrado${found !== 1 ? 's' : ''}`);
               }
             } catch (e) {
               if (e.name === 'AbortError') throw e;
-              results[cod] = null;
-              failStep(codeSteps[cod], `${cod} — falha`);
+              failStep(bStep, `Lote ${i+1}/${batches.length} — falha`);
+              batch.forEach(c => { results[c] = null; });
             }
-          }));
+          }
 
           const elapsed = $el.textContent;
           stopTimer();
-          $out.innerHTML = codes.map(cod => {
+          $out.innerHTML = [
+            ...invalid.map(c => `<div class="err-box" style="margin-bottom:8px">⚠️ ${esc(c)}: formato inválido</div>`),
+            ...valid.map(cod => {
               const obj = results[cod];
               if (!obj) return `<div class="err-box" style="margin-bottom:8px">⚠️ ${esc(cod)}: não encontrado</div>`;
               const card = renderCard(obj, cod, null);
@@ -702,7 +731,8 @@ _HTML = r"""<!DOCTYPE html>
                   (obj.situacao || '').toUpperCase() === 'E', null);
               }
               return `<div style="margin-bottom:10px">${card}</div>`;
-            }).join('');
+            })
+          ].join('');
         }
       } catch (e) {
         stopTimer();

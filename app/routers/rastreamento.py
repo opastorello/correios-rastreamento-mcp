@@ -1,7 +1,8 @@
+import re as _re
 from typing import List
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -35,6 +36,8 @@ _EXAMPLE_MULTIPLOS = {
     "AA000000001BR": _EXAMPLE_OBJETO,
 }
 
+_CODE_RE = _re.compile(r'^[A-Z]{2}\d{9}[A-Z]{2}$')
+
 router = APIRouter(prefix="/rastreamento", tags=["rastreamento"])
 
 
@@ -42,10 +45,35 @@ class ObjetoRequest(BaseModel):
     model_config = {"json_schema_extra": {"example": {"codigo": "AA000000000BR"}}}
     codigo: str = Field(..., description="Código de rastreamento do objeto (ex: AA000000000BR)", examples=["AA000000000BR"])
 
+    @field_validator("codigo")
+    @classmethod
+    def validar_codigo(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not _CODE_RE.match(v):
+            raise ValueError("Formato inválido. Esperado: 2 letras + 9 dígitos + 2 letras (ex: AA000000000BR)")
+        return v
+
 
 class MultiplosRequest(BaseModel):
     model_config = {"json_schema_extra": {"example": {"codigos": ["AA000000000BR", "AA000000001BR"]}}}
     codigos: List[str] = Field(..., description="Lista de códigos de rastreamento (máximo 20)", examples=[["AA000000000BR", "AA000000001BR"]])
+
+    @field_validator("codigos")
+    @classmethod
+    def validar_codigos(cls, v: List[str]) -> List[str]:
+        if len(v) > 20:
+            raise ValueError("Máximo de 20 códigos por requisição")
+        result, invalid = [], []
+        for cod in v:
+            cod = cod.strip().upper()
+            if _CODE_RE.match(cod):
+                result.append(cod)
+            else:
+                invalid.append(cod)
+        if invalid:
+            amostra = ", ".join(invalid[:3]) + ("…" if len(invalid) > 3 else "")
+            raise ValueError(f"Código(s) inválido(s): {amostra}")
+        return result
 
 
 @router.post(
@@ -75,7 +103,5 @@ async def rastrear_objeto(request: Request, body: ObjetoRequest):
 )
 @limiter.limit(_cfg.RATE_LIMIT_MULTIPLOS)
 async def rastrear_multiplos(request: Request, body: MultiplosRequest):
-    if len(body.codigos) > 20:
-        raise HTTPException(status_code=400, detail="Máximo de 20 objetos por requisição")
     _m.correios_batch_size.observe(len(body.codigos))
     return await correios.rastrear_multiplos(body.codigos)

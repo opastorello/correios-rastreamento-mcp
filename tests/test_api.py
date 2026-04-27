@@ -101,7 +101,7 @@ def test_rastrear_multiplos_sucesso(client):
 def test_rastrear_multiplos_limite_20(client):
     codigos = [f"AA{i:09d}BR" for i in range(21)]
     r = client.post("/rastreamento/multiplos", json={"codigos": codigos})
-    assert r.status_code == 400
+    assert r.status_code == 422  # validação Pydantic (era 400 via HTTPException)
 
 
 def test_rastrear_multiplos_payload_invalido(client):
