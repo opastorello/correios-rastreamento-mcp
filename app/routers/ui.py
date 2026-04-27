@@ -128,6 +128,33 @@ _HTML = r"""<!DOCTYPE html>
 
     input::placeholder { color: var(--muted); text-transform: none; }
 
+    textarea {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 11px 14px;
+      color: var(--text);
+      font-size: 15px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+      text-transform: uppercase;
+      resize: none;
+      overflow: hidden;
+      line-height: 1.6;
+      min-height: 44px;
+    }
+
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(31,111,235,.15);
+    }
+
+    textarea::placeholder { color: var(--muted); text-transform: none; }
+
+    .cod-hint { font-size: 11px; color: var(--accent); margin-top: 5px; min-height: 16px; }
+
     button {
       display: flex;
       align-items: center;
@@ -320,6 +347,66 @@ _HTML = r"""<!DOCTYPE html>
       padding: 32px 0;
     }
 
+    /* ── progress log ── */
+    .log-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 16px 20px;
+      margin-top: 14px;
+    }
+
+    .log-head {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      color: var(--muted);
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .elapsed { font-variant-numeric: tabular-nums; }
+
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 13px;
+      padding: 4px 0;
+      opacity: 0;
+      transform: translateY(4px);
+      transition: opacity .2s, transform .2s;
+      line-height: 1.4;
+    }
+
+    .step.show { opacity: 1; transform: none; }
+
+    .si {
+      flex-shrink: 0;
+      width: 18px; height: 20px;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    .step.pending .si::after {
+      content: '';
+      display: block;
+      width: 13px; height: 13px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: rot .6s linear infinite;
+    }
+
+    .step.done .si { color: var(--muted); }
+    .step.done .si::after { content: '✓'; font-size: 14px; }
+    .step.done > span:last-child { color: var(--muted); }
+
+    .step.fail .si { color: var(--muted); }
+    .step.fail .si::after { content: '✕'; font-size: 14px; }
+    .step.fail > span:last-child { color: var(--muted); }
+
     /* ── gate ── */
     .spin {
       width: 15px; height: 15px;
@@ -364,12 +451,22 @@ _HTML = r"""<!DOCTYPE html>
       <div class="tab-panel active" id="panel-rastrear">
         <div class="card">
           <div class="field">
-            <label>Código de rastreamento</label>
-            <input id="codigo" type="text" placeholder="AA000000000BR"
-                   spellcheck="false" autocomplete="off" maxlength="13" />
+            <label>Código(s) de rastreamento</label>
+            <textarea id="codigos" rows="1" placeholder="AA000000000BR, AA000000001BR…"
+                      spellcheck="false" autocomplete="off"></textarea>
+            <div class="cod-hint" id="cod-hint"></div>
           </div>
           <button id="btn" onclick="rastrear()">Rastrear</button>
         </div>
+
+        <div id="log-box" class="log-box" style="display:none">
+          <div class="log-head">
+            <span>Progresso</span>
+            <span class="elapsed" id="elapsed">0.0s</span>
+          </div>
+          <div id="steps"></div>
+        </div>
+
         <div id="out"></div>
       </div>
 
@@ -405,104 +502,221 @@ _HTML = r"""<!DOCTYPE html>
   <script>
     const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
-    const $codigo  = document.getElementById('codigo');
+    const $codigos = document.getElementById('codigos');
+    const $hint    = document.getElementById('cod-hint');
     const $btn     = document.getElementById('btn');
     const $out     = document.getElementById('out');
+    const $logBox  = document.getElementById('log-box');
+    const $steps   = document.getElementById('steps');
+    const $el      = document.getElementById('elapsed');
 
-    $codigo.addEventListener('input', function() {
-      this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 13);
+    function parseCodigos() {
+      return $codigos.value.toUpperCase()
+        .split(/[\n,;\s]+/)
+        .map(s => s.replace(/[^A-Z0-9]/g, ''))
+        .filter(s => s.length >= 8);
+    }
+
+    function autoResize() {
+      $codigos.style.height = 'auto';
+      $codigos.style.height = $codigos.scrollHeight + 'px';
+    }
+
+    $codigos.addEventListener('input', function() {
+      autoResize();
+      const codes = parseCodigos();
+      if (codes.length > 1)      $hint.textContent = `${codes.length} códigos detectados`;
+      else if (codes.length === 1) $hint.textContent = '';
+      else                          $hint.textContent = '';
     });
-    $codigo.addEventListener('keydown', e => { if (e.key === 'Enter') rastrear(); });
+
+    $codigos.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey && parseCodigos().length <= 1) {
+        e.preventDefault();
+        rastrear();
+      }
+    });
 
     const AUTH_REQUIRED = __AUTH_REQUIRED__;
     const getToken = () => localStorage.getItem('api_token') || '';
     const authH = () => { const t = getToken(); return t ? {'Authorization': 'Bearer ' + t} : {}; };
-    const post = (path, body) => fetch(path, { method: 'POST', headers: {'Content-Type':'application/json', ...authH()}, body: JSON.stringify(body) });
+
+    /* ── timer ── */
+    let _t = null;
+    function startTimer() {
+      const t0 = Date.now();
+      $el.textContent = '0.0s';
+      _t = setInterval(() => { $el.textContent = ((Date.now()-t0)/1000).toFixed(1)+'s'; }, 100);
+    }
+    function stopTimer() { clearInterval(_t); }
+
+    /* ── steps ── */
+    function resetLog() { $steps.innerHTML = ''; $logBox.style.display = 'none'; $el.textContent = '0.0s'; }
+
+    function addStep(txt) {
+      $logBox.style.display = 'block';
+      const el = document.createElement('div');
+      el.className = 'step pending';
+      el.innerHTML = `<span class="si"></span><span>${txt}</span>`;
+      $steps.appendChild(el);
+      requestAnimationFrame(() => el.classList.add('show'));
+      return el;
+    }
+
+    function doneStep(el, txt) { el.className = 'step show done'; if (txt) el.querySelector('span:last-child').textContent = txt; }
+    function failStep(el, txt) { el.className = 'step show fail'; if (txt) el.querySelector('span:last-child').textContent = txt; }
+
+    const delay = ms => new Promise(r => setTimeout(r, ms));
+
+    let _abort = null;
+    function cancelar() { if (_abort) _abort.abort(); }
+
+    /* ── render helpers ── */
+    function renderCard(data, codigo, elapsed) {
+      if (data.erro) return `<div class="err-box">⚠️ ${esc(data.mensagem || 'Objeto não encontrado.')}</div>`;
+      const entregue = (data.situacao || '').toUpperCase() === 'E';
+      const eventos = data.eventos || [];
+      const lastEvento = eventos[0] || {};
+      const lastStatus = (lastEvento.descricaoWeb || '').toUpperCase();
+      const badgeClass = entregue ? 'badge-delivered' : 'badge-transit';
+      const badgeIcon  = entregue ? '✓' : '↻';
+      const badgeText  = entregue ? 'Entregue' : (lastStatus || 'Em andamento');
+      const tipoDesc   = (data.tipoPostal || {}).descricao || '';
+      const eventsHtml = eventos.map((ev, i) => {
+        const dtFmt = fmtDatetime((ev.dtHrCriado || {}).date || '');
+        const loc   = formatLoc(ev.unidade);
+        const desc  = esc(ev.descricaoWeb || ev.descricaoFrontEnd || '');
+        const dot   = i === 0 ? (entregue ? 'first' : 'transit') : '';
+        return `<div class="event">
+          <div class="event-dot ${dot}"></div>
+          <div class="event-body">
+            <div class="event-desc">${desc}</div>
+            ${loc    ? `<div class="event-loc">${esc(loc)}</div>` : ''}
+            ${dtFmt  ? `<div class="event-time">${esc(dtFmt)}</div>` : ''}
+          </div></div>`;
+      }).join('');
+      return `<div class="result-card">
+        <div class="result-head">
+          <div>
+            <div class="result-code">${esc(data.codObjeto || codigo)}</div>
+            ${tipoDesc ? `<div class="result-type">${esc(tipoDesc)}</div>` : ''}
+          </div>
+          <span class="badge ${badgeClass}">${badgeIcon} ${esc(badgeText)}</span>
+        </div>
+        <div class="result-meta">
+          ${data.dtPrevista ? `<div class="meta-item">Previsão: <strong>${esc(data.dtPrevista)}</strong></div>` : ''}
+          ${elapsed != null ? `<div class="meta-item">Consultado em <strong>${elapsed}s</strong></div>` : ''}
+        </div>
+        ${eventos.length ? `<div class="timeline">
+          <div class="tl-label">Histórico de eventos (${eventos.length})</div>
+          ${eventsHtml}
+        </div>` : ''}
+      </div>`;
+    }
 
     /* ── rastrear ── */
     async function rastrear() {
-      const codigo = $codigo.value.trim();
-      if (!codigo) { $codigo.focus(); return; }
+      const codes = parseCodigos();
+      if (!codes.length) { $codigos.focus(); return; }
+      if (codes.length > 20) {
+        $out.innerHTML = `<div class="err-box">⚠️ Máximo de 20 códigos por vez (${codes.length} detectados).</div>`;
+        return;
+      }
 
-      $btn.disabled = true;
-      $btn.innerHTML = '<span class="spin"></span>Rastreando…';
+      _abort = new AbortController();
+      const {signal} = _abort;
+      const postA = (path, body) => fetch(path, { method: 'POST', signal, headers: {'Content-Type':'application/json', ...authH()}, body: JSON.stringify(body) });
+
+      $btn.onclick = cancelar;
+      $btn.innerHTML = '✕ Cancelar';
+      $btn.style.cssText = 'background:transparent;border:1px solid var(--border);color:var(--muted)';
       $out.innerHTML = '';
-
-      const t0 = Date.now();
+      resetLog();
+      startTimer();
 
       try {
-        const res  = await post('/rastreamento/objeto', { codigo });
-        const data = await res.json();
-        const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+        const s1 = addStep(codes.length > 1
+          ? `${codes.length} código${codes.length > 1 ? 's' : ''} para rastrear`
+          : `Código: ${codes[0]}`);
+        await delay(200);
+        doneStep(s1);
 
-        if (!res.ok) {
-          $out.innerHTML = `<div class="err-box">⚠️ ${esc(data.detail || 'Erro na consulta')}</div>`;
-          return;
+        const s2 = addStep('Conectando ao servidor Correios…');
+        await delay(300);
+        doneStep(s2, 'Conexão estabelecida');
+
+        if (codes.length === 1) {
+          const s3 = addStep('Resolvendo CAPTCHA…');
+          const res  = await postA('/rastreamento/objeto', { codigo: codes[0] });
+          const data = await res.json();
+          const elapsed = $el.textContent;
+          stopTimer();
+          if (!res.ok) {
+            failStep(s3, 'Erro na consulta');
+            $out.innerHTML = `<div class="err-box">⚠️ ${esc(data.detail || 'Erro na consulta')}</div>`;
+            return;
+          }
+          doneStep(s3, 'CAPTCHA resolvido');
+          $out.innerHTML = renderCard(data, codes[0], parseFloat(elapsed));
+          if (!data.erro) {
+            const lastStatus = ((data.eventos || [])[0] || {}).descricaoWeb || '';
+            saveToHistory(data.codObjeto || codes[0], lastStatus.toUpperCase() || null,
+              (data.situacao || '').toUpperCase() === 'E', parseFloat(elapsed));
+          }
+        } else {
+          const codeSteps = {};
+          for (const cod of codes) {
+            codeSteps[cod] = addStep(`${cod} — aguardando…`);
+          }
+
+          const results = {};
+          await Promise.all(codes.map(async cod => {
+            try {
+              const res  = await postA('/rastreamento/objeto', { codigo: cod });
+              const data = await res.json();
+              results[cod] = data;
+              if (!res.ok) {
+                failStep(codeSteps[cod], `${cod} — erro`);
+              } else if (data.erro) {
+                failStep(codeSteps[cod], `${cod} — não encontrado`);
+              } else {
+                const status = ((data.eventos || [])[0] || {}).descricaoWeb || '';
+                doneStep(codeSteps[cod], `${cod} — ${status.toLowerCase() || 'consultado'}`);
+              }
+            } catch (e) {
+              if (e.name === 'AbortError') throw e;
+              results[cod] = null;
+              failStep(codeSteps[cod], `${cod} — falha`);
+            }
+          }));
+
+          const elapsed = $el.textContent;
+          stopTimer();
+          $out.innerHTML = codes.map(cod => {
+              const obj = results[cod];
+              if (!obj) return `<div class="err-box" style="margin-bottom:8px">⚠️ ${esc(cod)}: não encontrado</div>`;
+              const card = renderCard(obj, cod, null);
+              if (!obj.erro) {
+                const lastStatus = ((obj.eventos || [])[0] || {}).descricaoWeb || '';
+                saveToHistory(obj.codObjeto || cod, lastStatus.toUpperCase() || null,
+                  (obj.situacao || '').toUpperCase() === 'E', null);
+              }
+              return `<div style="margin-bottom:10px">${card}</div>`;
+            }).join('');
         }
-
-        if (data.erro) {
-          $out.innerHTML = `<div class="err-box">⚠️ ${esc(data.mensagem || 'Objeto não encontrado.')}</div>`;
-          return;
-        }
-
-        const entregue = (data.situacao || '').toUpperCase() === 'E';
-        const eventos = data.eventos || [];
-        const lastEvento = eventos[0] || {};
-        const lastStatus = (lastEvento.descricaoWeb || '').toUpperCase();
-
-        const badgeClass = entregue ? 'badge-delivered' : 'badge-transit';
-        const badgeIcon  = entregue ? '✓' : '↻';
-        const badgeText  = entregue ? 'Entregue' : (lastStatus || 'Em andamento');
-        const tipoDesc   = (data.tipoPostal || {}).descricao || '';
-
-        const eventsHtml = eventos.map((ev, i) => {
-          const dtRaw = (ev.dtHrCriado || {}).date || '';
-          const dtFmt = fmtDatetime(dtRaw);
-          const loc = formatLoc(ev.unidade);
-          const desc = esc(ev.descricaoWeb || ev.descricaoFrontEnd || '');
-          const dotClass = i === 0 ? (entregue ? 'first' : 'transit') : '';
-          return `
-          <div class="event">
-            <div class="event-dot ${dotClass}"></div>
-            <div class="event-body">
-              <div class="event-desc">${desc}</div>
-              ${loc ? `<div class="event-loc">${esc(loc)}</div>` : ''}
-              ${dtFmt ? `<div class="event-time">${esc(dtFmt)}</div>` : ''}
-            </div>
-          </div>`;
-        }).join('');
-
-        $out.innerHTML = `
-          <div class="result-card">
-            <div class="result-head">
-              <div>
-                <div class="result-code">${esc(data.codObjeto || codigo)}</div>
-                ${tipoDesc ? `<div class="result-type">${esc(tipoDesc)}</div>` : ''}
-              </div>
-              <span class="badge ${badgeClass}">${badgeIcon} ${esc(badgeText)}</span>
-            </div>
-            ${data.dtPrevista ? `
-            <div class="result-meta">
-              <div class="meta-item">Previsão de entrega: <strong>${esc(data.dtPrevista)}</strong></div>
-              <div class="meta-item">Consultado em <strong>${elapsed}s</strong></div>
-            </div>` : `
-            <div class="result-meta">
-              <div class="meta-item">Consultado em <strong>${elapsed}s</strong></div>
-            </div>`}
-            ${eventos.length ? `
-            <div class="timeline">
-              <div class="tl-label">Histórico de eventos (${eventos.length})</div>
-              ${eventsHtml}
-            </div>` : ''}
-          </div>`;
-
-        saveToHistory(data.codObjeto || codigo, lastStatus || null, entregue, parseFloat(elapsed));
-
       } catch (e) {
-        $out.innerHTML = `<div class="err-box">⚠️ ${esc(e.message)}</div>`;
+        stopTimer();
+        $steps.querySelectorAll('.step:not(.done):not(.fail)').forEach(el => failStep(el, null));
+        if (e.name === 'AbortError') {
+          $out.innerHTML = `<div class="err-box">Busca cancelada.</div>`;
+        } else {
+          $out.innerHTML = `<div class="err-box">⚠️ ${esc(e.message)}</div>`;
+        }
       } finally {
-        $btn.disabled = false;
+        $btn.onclick = rastrear;
         $btn.textContent = 'Rastrear';
+        $btn.style.cssText = '';
+        $btn.disabled = false;
       }
     }
 
@@ -631,7 +845,8 @@ _HTML = r"""<!DOCTYPE html>
 
     function fillFromHistory(codigo) {
       switchTab('rastrear');
-      $codigo.value = codigo;
+      $codigos.value = codigo;
+      autoResize();
       $out.innerHTML = '';
     }
   </script>

@@ -6,6 +6,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app import config as _cfg
+from app import metrics as _m
 from app.services import correios
 
 limiter = Limiter(key_func=get_remote_address)
@@ -76,4 +77,5 @@ async def rastrear_objeto(request: Request, body: ObjetoRequest):
 async def rastrear_multiplos(request: Request, body: MultiplosRequest):
     if len(body.codigos) > 20:
         raise HTTPException(status_code=400, detail="Máximo de 20 objetos por requisição")
+    _m.correios_batch_size.observe(len(body.codigos))
     return await correios.rastrear_multiplos(body.codigos)

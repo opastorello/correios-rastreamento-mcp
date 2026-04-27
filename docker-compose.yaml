@@ -1,0 +1,29 @@
+services:
+  correios-rastreamento-mcp:
+    build: .
+    ports:
+      - "8003:8000"
+    environment:
+      - API_TOKEN=${API_TOKEN:-}
+      - ENV=${ENV:-production}
+      - RATE_LIMIT_OBJETO=${RATE_LIMIT_OBJETO:-20/minute}
+      - RATE_LIMIT_MULTIPLOS=${RATE_LIMIT_MULTIPLOS:-10/minute}
+      - HTTP_TIMEOUT=${HTTP_TIMEOUT:-30}
+      - CAPTCHA_TIMEOUT=${CAPTCHA_TIMEOUT:-15}
+      - MAX_RETRIES=${MAX_RETRIES:-4}
+      - MAX_CONCURRENT=${MAX_CONCURRENT:-10}
+      - CAPTCHA_MODEL_PATH=${CAPTCHA_MODEL_PATH:-}
+      - HISTORY_RETENTION_DAYS=${HISTORY_RETENTION_DAYS:-90}
+      - APP_TIMEZONE=${APP_TIMEZONE:-America/Sao_Paulo}
+    volumes:
+      - correios_data:/app/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: always
+
+volumes:
+  correios_data:

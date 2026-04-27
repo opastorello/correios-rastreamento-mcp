@@ -14,9 +14,9 @@ pip install -r requirements-dev.txt
 # Run server locally (FastAPI + FastMCP on port 8000)
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-# Docker
-docker build -t correios-rastreamento .
-docker run -p 8000:8000 correios-rastreamento
+# Docker (porta 8003 conforme docker-compose.yaml)
+docker compose up --build -d
+docker compose down
 ```
 
 Manual testing:
@@ -58,11 +58,16 @@ app/
 | `rastrear_multiplos` | Rastreia até 20 objetos de uma vez |
 
 ### REST endpoints
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/rastreamento/objeto` | Rastreia um objeto |
-| POST | `/rastreamento/multiplos` | Rastreia múltiplos objetos (até 20) |
-| GET | `/health` | Health check |
+| Método | Rota | Rate limit | Descrição |
+|--------|------|------------|-----------|
+| GET | `/` | — | Interface web |
+| POST | `/rastreamento/objeto` | 20/min por IP | Rastreia um objeto |
+| POST | `/rastreamento/multiplos` | 10/min por IP | Rastreia múltiplos objetos (até 20) |
+| GET | `/history/` | — | Lista histórico de rastreamentos |
+| POST | `/history/save` | — | Salva ou atualiza uma entrada no histórico |
+| DELETE | `/history/` | — | Limpa todo o histórico |
+| DELETE | `/history/{codigo}` | — | Remove uma entrada do histórico |
+| GET | `/health` | — | Health check |
 
 ### Correios scraping flow
 1. GET `index.php` → obtém session cookie (PHP session)

@@ -43,6 +43,13 @@ O rastreamento é feito via scraping do site oficial dos Correios. A resolução
 
 Documentação interativa: `http://localhost:8000/docs` (disponível apenas em `ENV=development`).
 
+### 📂 Histórico de rastreamentos
+
+O histórico é **global e compartilhado** — todas as consultas feitas pela interface web, pela REST API ou via MCP gravam no mesmo arquivo de histórico do servidor.
+
+- **Interface web:** rastreamentos bem-sucedidos são salvos automaticamente no histórico.
+- **REST API / MCP:** toda consulta bem-sucedida pode ser registrada chamando `POST /history/save` com os dados do objeto.
+
 ---
 
 ## 🏗️ Arquitetura
@@ -98,7 +105,7 @@ Todas as opções são lidas de variáveis de ambiente ou do arquivo `.env` na r
 | Rota | `development` | `production` |
 | ---- | :-----------: | :----------: |
 | `/` | ✅ aberta | ✅ aberta |
-| `/health` | ✅ aberta | 🔒 token |
+| `/health` | ✅ aberta | ✅ aberta |
 | `/docs` | ✅ aberta | 🔒 token |
 | `/redoc` | ✅ aberta | 🔒 token |
 | `/openapi.json` | ✅ aberta | 🔒 token |
@@ -273,6 +280,41 @@ O melhor modelo (menor `val_loss`) é salvo em `app/captcha/captcha_model.pt`. P
 ```bash
 python -m app.captcha.registry
 ```
+
+---
+
+## 🗺️ Roadmap
+
+Ideias e melhorias planejadas para versões futuras.
+
+### Escalabilidade
+- **Cache de resultados** — objetos já consultados recentemente retornam resultado armazenado sem nova requisição aos Correios. Reduz latência e carga no servidor.
+- **Worker distribuído** — arquitetura de fila para distribuir consultas em múltiplos IPs e reduzir risco de throttling.
+
+### Multi-usuário
+- **Histórico isolado por token** — cada integração (web, API, MCP) mantém seu próprio registro separado em vez do histórico global compartilhado atual.
+- **Quota de consultas por token** — limite diário/mensal de rastreamentos configurável independentemente do rate limit por IP.
+
+### Cobertura
+- **Notificação de atualização** — webhook ou push notification quando um objeto muda de status desde a última consulta.
+
+---
+
+## ⚖️ Responsabilidade de Uso
+
+Este projeto consulta exclusivamente o sistema público dos **Correios** — os mesmos dados acessíveis por qualquer pessoa pelo site oficial, sem login ou cadastro.
+
+**Usos adequados:**
+- Acompanhamento pessoal de encomendas
+- Integração com agentes AI para automação de processos legítimos
+- Monitoramento de entregas em sistemas próprios
+
+**O projeto não se destina a:**
+- Varredura em massa sem finalidade específica
+- Qualquer uso que sobrecarregue desnecessariamente a infraestrutura dos Correios
+- Qualquer uso que viole os termos de serviço ou a legislação brasileira vigente
+
+O código é aberto e auditável. A responsabilidade pelo uso é inteiramente do operador que implanta e utiliza o serviço. Rate limiting está configurado por padrão para desincentivar abuso.
 
 ---
 

@@ -1,18 +1,17 @@
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
+from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-load_dotenv()
-
-from app.auth import TokenMiddleware  # noqa: E402
-from app.mcp_server import mcp  # noqa: E402
-from app.routers import history, rastreamento, ui  # noqa: E402
+from app.auth import TokenMiddleware
+from app.mcp_server import mcp
+from app.routers import history, rastreamento, ui
 
 limiter = Limiter(key_func=get_remote_address)
 
+# FastMCP — endpoint will live at /mcp (no sub-mount, avoids 307 redirect)
 _mcp_app = mcp.http_app(path="/mcp")
 
 app = FastAPI(
@@ -56,19 +55,22 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(TokenMiddleware)
 
 
+# REST routers — all defined before mount so they aren't swallowed by the "/" catch-all
 @app.get(
     "/health",
-    tags=["status"],
+    tags=["health"],
     summary="Health check",
-    description="Verifica se o servidor está no ar. Em `ENV=production` exige token.",
+    description="Verifica se o servidor está no ar.",
     responses={200: {"content": {"application/json": {"example": {"status": "ok"}}}}},
 )
-def health():
+async def health():
     return {"status": "ok"}
 
 
 app.include_router(ui.router)
 app.include_router(history.router)
 app.include_router(rastreamento.router)
+
+Instrumentator().instrument(app).expose(app, include_in_schema=False)
 
 app.mount("/", _mcp_app)

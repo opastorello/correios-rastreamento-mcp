@@ -13,7 +13,16 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture(scope="module")
 def client():
+    from contextlib import asynccontextmanager
+    import app.auth as _auth
+    _auth._TOKEN = ""  # garante que o client de teste roda sem autenticação
     from app.main import app
+
+    @asynccontextmanager
+    async def _noop_lifespan(_app):
+        yield
+
+    app.router.lifespan_context = _noop_lifespan
     return TestClient(app, raise_server_exceptions=True)
 
 
@@ -116,22 +125,22 @@ def test_auth_sem_api_token_configurado(client):
 
 def test_auth_com_api_token(monkeypatch):
     """Com API_TOKEN definido — exige Bearer token correto."""
-    monkeypatch.setenv("API_TOKEN", "test-secret")
+    import app.auth as _auth
+    monkeypatch.setattr(_auth, "_TOKEN", "test-secret")
 
     from fastapi import FastAPI
-    from contextlib import asynccontextmanager
     from app.auth import TokenMiddleware
     from app.routers import rastreamento
 
-    app = FastAPI()
-    app.add_middleware(TokenMiddleware)
-    app.include_router(rastreamento.router)
+    test_app = FastAPI()
+    test_app.add_middleware(TokenMiddleware)
+    test_app.include_router(rastreamento.router)
 
-    @app.get("/health")
-    def health():
+    @test_app.get("/health")
+    async def health():
         return {"status": "ok"}
 
-    with TestClient(app) as c:
+    with TestClient(test_app) as c:
         # health sempre público
         assert c.get("/health").status_code == 200
 

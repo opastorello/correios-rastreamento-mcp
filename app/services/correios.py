@@ -15,10 +15,15 @@ Fluxo para múltiplos objetos (até 20):
   5. Retry até MAX_RETRIES se CAPTCHA inválido
   — 1 CAPTCHA para até 20 objetos (em vez de N requests individuais)
 """
+import threading
+import time
 from typing import Any
 
 from curl_cffi import requests as cffi_requests
 from starlette.concurrency import run_in_threadpool
+
+from app import config as _cfg
+from app import metrics as _m
 
 _BASE_URL = "https://rastreamento.correios.com.br/app"
 _CAPTCHA_URL = "https://rastreamento.correios.com.br/core/securimage/securimage_show.php"
@@ -29,7 +34,10 @@ _HEADERS = {
     "Accept-Language": "pt-BR,pt;q=0.9",
     "Referer": f"{_BASE_URL}/index.php",
 }
-MAX_RETRIES = 4
+
+# Limita conexões simultâneas aos Correios independente de quantos usuários estão consultando
+_CORREIOS_SEMAPHORE = threading.Semaphore(_cfg.MAX_CONCURRENT)
+
 
 def _solve_captcha(image_bytes: bytes) -> str:
     from app.captcha.predictor import predict
@@ -40,66 +48,140 @@ def _is_captcha_error(data: Any) -> bool:
     if not isinstance(data, dict):
         return False
     erro = data.get("erro")
-    # API retorna "erro": "true" (string) ou "erro": true (bool)
     erro_flag = erro is True or str(erro).lower() == "true"
     return erro_flag and "captcha" in data.get("mensagem", "").lower()
 
 
 def _fetch_captcha(session) -> bytes:
-    session.get(f"{_BASE_URL}/index.php", headers=_HEADERS, timeout=30)
-    resp = session.get(_CAPTCHA_URL, headers=_HEADERS, timeout=15)
+    session.get(f"{_BASE_URL}/index.php", headers=_HEADERS, timeout=_cfg.HTTP_TIMEOUT)
+    resp = session.get(_CAPTCHA_URL, headers=_HEADERS, timeout=_cfg.CAPTCHA_TIMEOUT)
     resp.raise_for_status()
     return resp.content
 
 
 def _rastrear_sync(codigo: str) -> dict:
+    _m.correios_concurrent_queries.inc()
+    try:
+        with _CORREIOS_SEMAPHORE:
+            return _rastrear_com_sessao(codigo)
+    finally:
+        _m.correios_concurrent_queries.dec()
+
+
+def _rastrear_com_sessao(codigo: str) -> dict:
     session = cffi_requests.Session(impersonate="chrome124")
-    for _ in range(MAX_RETRIES):
-        image_bytes = _fetch_captcha(session)
-        captcha_text = _solve_captcha(image_bytes)
-        resp = session.get(
-            f"{_BASE_URL}/resultado.php",
-            params={"objeto": codigo, "captcha": captcha_text, "mqs": "S"},
-            headers=_HEADERS,
-            timeout=30,
-        )
-        data = resp.json()
-        if _is_captcha_error(data):
+    attempts = 0
+    t_start = time.time()
+
+    for _ in range(_cfg.MAX_RETRIES):
+        try:
+            t_captcha = time.time()
+            _m.correios_captcha_attempts_total.inc()
+            attempts += 1
+
+            image_bytes = _fetch_captcha(session)
+            captcha_text = _solve_captcha(image_bytes)
+            _m.correios_captcha_duration_seconds.observe(time.time() - t_captcha)
+
+            resp = session.get(
+                f"{_BASE_URL}/resultado.php",
+                params={"objeto": codigo, "captcha": captcha_text, "mqs": "S"},
+                headers=_HEADERS,
+                timeout=_cfg.HTTP_TIMEOUT,
+            )
+            data = resp.json()
+
+            if _is_captcha_error(data):
+                _m.correios_captcha_result_total.labels(result="wrong").inc()
+                continue
+
+            _m.correios_captcha_result_total.labels(result="success").inc()
+            _m.correios_captcha_retries_per_query.observe(attempts)
+            _m.correios_query_duration_seconds.observe(time.time() - t_start)
+            label = "not_found" if data.get("erro") else "success"
+            _m.correios_queries_total.labels(type="single", result=label).inc()
+            return data
+
+        except Exception as exc:
+            _m.correios_captcha_result_total.labels(result="error").inc()
+            err_type = "timeout" if "timeout" in str(exc).lower() else "connection"
+            _m.correios_http_errors_total.labels(type=err_type).inc()
             continue
-        return data
-    return {"erro": True, "mensagem": f"CAPTCHA inválido após {MAX_RETRIES} tentativas"}
+
+    _m.correios_captcha_retries_per_query.observe(attempts)
+    _m.correios_queries_total.labels(type="single", result="captcha_failed").inc()
+    _m.correios_query_duration_seconds.observe(time.time() - t_start)
+    return {"erro": True, "mensagem": f"CAPTCHA inválido após {_cfg.MAX_RETRIES} tentativas"}
 
 
 def _rastrear_multiplos_sync(codigos: list) -> dict:
+    _m.correios_concurrent_queries.inc()
+    try:
+        with _CORREIOS_SEMAPHORE:
+            return _rastrear_multiplos_com_sessao(codigos)
+    finally:
+        _m.correios_concurrent_queries.dec()
+
+
+def _rastrear_multiplos_com_sessao(codigos: list) -> dict:
     session = cffi_requests.Session(impersonate="chrome124")
     objeto_param = "".join(codigos)
-    for _ in range(MAX_RETRIES):
-        image_bytes = _fetch_captcha(session)
-        captcha_text = _solve_captcha(image_bytes)
-        resp = session.get(
-            f"{_BASE_URL}/rastroMulti.php",
-            params={"objeto": objeto_param, "captcha": captcha_text},
-            headers=_HEADERS,
-            timeout=30,
-        )
-        data = resp.json()
-        if _is_captcha_error(data):
+    attempts = 0
+    t_start = time.time()
+
+    for _ in range(_cfg.MAX_RETRIES):
+        try:
+            t_captcha = time.time()
+            _m.correios_captcha_attempts_total.inc()
+            attempts += 1
+
+            image_bytes = _fetch_captcha(session)
+            captcha_text = _solve_captcha(image_bytes)
+            _m.correios_captcha_duration_seconds.observe(time.time() - t_captcha)
+
+            resp = session.get(
+                f"{_BASE_URL}/rastroMulti.php",
+                params={"objeto": objeto_param, "captcha": captcha_text},
+                headers=_HEADERS,
+                timeout=_cfg.HTTP_TIMEOUT,
+            )
+            data = resp.json()
+
+            if _is_captcha_error(data):
+                _m.correios_captcha_result_total.labels(result="wrong").inc()
+                continue
+
+            _m.correios_captcha_result_total.labels(result="success").inc()
+            _m.correios_captcha_retries_per_query.observe(attempts)
+            _m.correios_query_duration_seconds.observe(time.time() - t_start)
+
+            if isinstance(data, dict) and data.get("erro"):
+                _m.correios_queries_total.labels(type="batch", result="error").inc()
+                return {c: data for c in codigos}
+
+            results = {}
+            for group in ("entregue", "transito"):
+                for item in data.get(group, []):
+                    cod = item.get("cod_objeto_", "").replace(" ", "")
+                    if cod and item.get("objeto"):
+                        results[cod] = item["objeto"]
+            for c in codigos:
+                if c not in results:
+                    results[c] = {"erro": True, "mensagem": "Objeto não encontrado na base de dados dos Correios."}
+
+            _m.correios_queries_total.labels(type="batch", result="success").inc()
+            return results
+
+        except Exception as exc:
+            _m.correios_captcha_result_total.labels(result="error").inc()
+            err_type = "timeout" if "timeout" in str(exc).lower() else "connection"
+            _m.correios_http_errors_total.labels(type=err_type).inc()
             continue
-        if isinstance(data, dict) and data.get("erro"):
-            return {c: data for c in codigos}
-        # Monta dict por código a partir de 'entregue' e 'transito'
-        results = {}
-        for group in ("entregue", "transito"):
-            for item in data.get(group, []):
-                # cod_objeto_ é o código sem formatação (ex: AA000000000BR)
-                cod = item.get("cod_objeto_", "").replace(" ", "")
-                if cod and item.get("objeto"):
-                    results[cod] = item["objeto"]
-        for c in codigos:
-            if c not in results:
-                results[c] = {"erro": True, "mensagem": "Objeto não encontrado na base de dados dos Correios."}
-        return results
-    return {c: {"erro": True, "mensagem": f"CAPTCHA inválido após {MAX_RETRIES} tentativas"} for c in codigos}
+
+    _m.correios_captcha_retries_per_query.observe(attempts)
+    _m.correios_queries_total.labels(type="batch", result="captcha_failed").inc()
+    _m.correios_query_duration_seconds.observe(time.time() - t_start)
+    return {c: {"erro": True, "mensagem": f"CAPTCHA inválido após {_cfg.MAX_RETRIES} tentativas"} for c in codigos}
 
 
 async def rastrear_objeto(codigo: str) -> dict:
