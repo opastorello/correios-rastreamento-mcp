@@ -5,6 +5,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from app import metrics as _m
 from app.auth import TokenMiddleware
 from app.mcp_server import mcp
 from app.routers import history, rastreamento, ui
@@ -50,8 +51,12 @@ def _custom_openapi():
 
 app.openapi = _custom_openapi
 
+def _rate_limit_handler(request, exc: RateLimitExceeded):
+    _m.correios_rate_limit_total.labels(endpoint=request.url.path).inc()
+    return _rate_limit_exceeded_handler(request, exc)
+
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 app.add_middleware(TokenMiddleware)
 
 

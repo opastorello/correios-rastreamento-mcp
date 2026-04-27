@@ -1,11 +1,17 @@
 from prometheus_client import Counter, Histogram, Gauge
 
-# ── Correios ───────────────────────────────────────────────────────────────────
+# ── Correios scraping ──────────────────────────────────────────────────────────
 
 correios_queries_total = Counter(
     "correios_queries_total",
     "Consultas ao Correios por tipo e resultado",
     ["type", "result"],  # type: single|batch  result: success|not_found|captcha_failed|error
+)
+
+correios_objects_total = Counter(
+    "correios_objects_total",
+    "Objetos individuais rastreados por resultado (1 por código, não por chamada)",
+    ["result"],  # found | not_found | error
 )
 
 correios_captcha_attempts_total = Counter(
@@ -54,15 +60,16 @@ correios_batch_size = Histogram(
     buckets=[1, 2, 5, 10, 15, 20],
 )
 
-# ── History ───────────────────────────────────────────────────────────────────
+# ── Acesso / uso ───────────────────────────────────────────────────────────────
 
-history_entries_current = Gauge(
-    "history_entries_current",
-    "Número atual de entradas no histórico server-side",
+correios_rate_limit_total = Counter(
+    "correios_rate_limit_total",
+    "Requisições bloqueadas por rate limit por endpoint",
+    ["endpoint"],
 )
 
-history_saves_total = Counter(
-    "history_saves_total",
-    "Salvamentos no histórico",
-    ["action"],  # new | update
+correios_mcp_calls_total = Counter(
+    "correios_mcp_calls_total",
+    "Chamadas recebidas via MCP por ferramenta e resultado",
+    ["tool", "result"],  # tool: rastrear_objeto|rastrear_multiplos  result: success|not_found|invalid|error
 )

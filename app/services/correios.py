@@ -98,8 +98,12 @@ def _rastrear_com_sessao(codigo: str) -> dict:
             _m.correios_captcha_result_total.labels(result="success").inc()
             _m.correios_captcha_retries_per_query.observe(attempts)
             _m.correios_query_duration_seconds.observe(time.time() - t_start)
-            label = "not_found" if data.get("erro") else "success"
-            _m.correios_queries_total.labels(type="single", result=label).inc()
+            if data.get("erro"):
+                _m.correios_queries_total.labels(type="single", result="not_found").inc()
+                _m.correios_objects_total.labels(result="not_found").inc()
+            else:
+                _m.correios_queries_total.labels(type="single", result="success").inc()
+                _m.correios_objects_total.labels(result="found").inc()
             return data
 
         except Exception as exc:
@@ -110,6 +114,7 @@ def _rastrear_com_sessao(codigo: str) -> dict:
 
     _m.correios_captcha_retries_per_query.observe(attempts)
     _m.correios_queries_total.labels(type="single", result="captcha_failed").inc()
+    _m.correios_objects_total.labels(result="error").inc()
     _m.correios_query_duration_seconds.observe(time.time() - t_start)
     return {"erro": True, "mensagem": f"CAPTCHA inválido após {_cfg.MAX_RETRIES} tentativas"}
 
@@ -157,6 +162,7 @@ def _rastrear_multiplos_com_sessao(codigos: list) -> dict:
 
             if isinstance(data, dict) and data.get("erro"):
                 _m.correios_queries_total.labels(type="batch", result="error").inc()
+                _m.correios_objects_total.labels(result="error").inc(len(codigos))
                 return {c: data for c in codigos}
 
             results = {}
@@ -169,6 +175,10 @@ def _rastrear_multiplos_com_sessao(codigos: list) -> dict:
                 if c not in results:
                     results[c] = {"erro": True, "mensagem": "Objeto não encontrado na base de dados dos Correios."}
 
+            found = sum(1 for v in results.values() if not v.get("erro"))
+            not_found = len(results) - found
+            _m.correios_objects_total.labels(result="found").inc(found)
+            _m.correios_objects_total.labels(result="not_found").inc(not_found)
             _m.correios_queries_total.labels(type="batch", result="success").inc()
             return results
 
@@ -180,6 +190,7 @@ def _rastrear_multiplos_com_sessao(codigos: list) -> dict:
 
     _m.correios_captcha_retries_per_query.observe(attempts)
     _m.correios_queries_total.labels(type="batch", result="captcha_failed").inc()
+    _m.correios_objects_total.labels(result="error").inc(len(codigos))
     _m.correios_query_duration_seconds.observe(time.time() - t_start)
     return {c: {"erro": True, "mensagem": f"CAPTCHA inválido após {_cfg.MAX_RETRIES} tentativas"} for c in codigos}
 
